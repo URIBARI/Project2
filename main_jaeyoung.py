@@ -7,10 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-# ============================================================
 # PDF FUNCTIONS
-# ============================================================
-
 def gaussian_pdf(x, mu, sigma, smoothing):
     if sigma <= 0:
         sigma = 1e-6
@@ -31,9 +28,7 @@ def lognormal_pdf(x, mu, sigma, smoothing):
     return max(p, smoothing)
 
 
-# ============================================================
 # TRAINING
-# ============================================================
 
 def training(instances, labels, smoothing):
 
@@ -82,9 +77,7 @@ def training(instances, labels, smoothing):
     return params
 
 
-# ============================================================
 # PREDICT
-# ============================================================
 
 def predict(instance, parameters):
     smoothing = parameters["smoothing"]
@@ -120,9 +113,7 @@ def predict(instance, parameters):
     return 1 if posterior > parameters["threshold"] else 0
 
 
-# ============================================================
 # PERFORMANCE METRIC
-# ============================================================
 
 def evaluate(predictions, answers):
     accuracy = sum(int(p == a) for p, a in zip(predictions, answers)) / len(answers)
@@ -137,9 +128,7 @@ def evaluate(predictions, answers):
     return accuracy, precision, recall
 
 
-# ============================================================
 # DATA LOADING
-# ============================================================
 
 def load_raw_data(fname):
     instances = []
@@ -161,9 +150,7 @@ def load_raw_data(fname):
     return instances, labels
 
 
-# ============================================================
 # RUN
-# ============================================================
 
 def run(train_file, test_file):
 
@@ -221,9 +208,7 @@ def run(train_file, test_file):
     logging.info("Saved tuning plot: tuning_performance.png")
 
 
-# ============================================================
 # MAIN
-# ============================================================
 
 def command_line_args():
     parser = argparse.ArgumentParser()

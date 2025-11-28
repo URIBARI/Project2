@@ -9,9 +9,7 @@ from sklearn.ensemble import RandomForestClassifier
 
 # ANOVA Test
 
-# ---------------------------------------------------
 # 1) Load data
-# ---------------------------------------------------
 df = pd.read_csv("training.csv")
 
 # Clean column names (strip spaces)
@@ -25,25 +23,19 @@ feature_cols = [
 X = df[feature_cols]
 y = df['label']
 
-# ---------------------------------------------------
 # 2) Mutual Information
-# ---------------------------------------------------
 mi_scores = mutual_info_classif(X, y, random_state=42)
 mi = pd.Series(mi_scores, index=feature_cols).sort_values(ascending=False)
 print("\n=== Mutual Information ===")
 print(mi)
 
-# ---------------------------------------------------
 # 3) ANOVA (F-test)
-# ---------------------------------------------------
 f_scores, p_values = f_classif(X, y)
 anova = pd.Series(f_scores, index=feature_cols).sort_values(ascending=False)
 print("\n=== ANOVA F-scores ===")
 print(anova)
 
-# ---------------------------------------------------
 # 4) Logistic Regression Coeff Importance
-# ---------------------------------------------------
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 
@@ -54,9 +46,7 @@ log_coef = pd.Series(np.abs(log_clf.coef_[0]), index=feature_cols).sort_values(a
 print("\n=== Logistic Regression Coeff Importance ===")
 print(log_coef)
 
-# ---------------------------------------------------
 # 5) Permutation Importance (model-agnostic)
-# ---------------------------------------------------
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
 
 rf = RandomForestClassifier(n_estimators=500)
@@ -67,9 +57,8 @@ perm = pd.Series(result.importances_mean, index=feature_cols).sort_values(ascend
 print("\n=== Permutation Importance (RF) ===")
 print(perm)
 
-# ---------------------------------------------------
+
 # 6) Summarize & pick top 3
-# ---------------------------------------------------
 summary = pd.DataFrame({
     "MI": mi,
     "ANOVA": anova,

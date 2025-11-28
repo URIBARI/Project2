@@ -7,15 +7,11 @@ import numpy as np
 import scipy.stats as st
 
 
-# =========================================================
 # 1. SELECTED FEATURES (avg temp, max temp, power)
-# =========================================================
 SELECTED_FEATURES = [1, 2, 7]   # column indexes to use
 
 
-# =========================================================
 # 2. Candidate distributions to test
-# =========================================================
 DISTRIBUTIONS = {
     "gaussian": st.norm,
     "gamma": st.gamma,
@@ -24,9 +20,8 @@ DISTRIBUTIONS = {
 }
 
 
-# =========================================================
 # 3. Fit distribution
-# =========================================================
+
 def fit_distribution(data):
     best_dist = None
     best_aic = np.inf
@@ -50,9 +45,7 @@ def fit_distribution(data):
     return best_dist, best_params
 
 
-# =========================================================
 # 4. Training (estimate distribution of NORMAL data)
-# =========================================================
 def training(instances, labels):
     normal_instances = [x for x, y in zip(instances, labels) if y == 0]
 
@@ -88,9 +81,7 @@ def training(instances, labels):
     return {"feature_info": feature_info}
 
 
-# =========================================================
 # 5. Likelihood calculation
-# =========================================================
 def log_likelihood(instance, params):
     x_raw = [instance[i] for i in SELECTED_FEATURES]
 
@@ -104,17 +95,13 @@ def log_likelihood(instance, params):
     return ll
 
 
-# =========================================================
 # 6. Prediction
-# =========================================================
 def predict(inst, params, threshold):
     ll = log_likelihood(inst, params)
     return 1 if ll < threshold else 0
 
 
-# =========================================================
 # 7. Report
-# =========================================================
 def report(preds, labels):
     correct = sum(p == y for p, y in zip(preds, labels))
     accuracy = correct / len(labels)
@@ -132,9 +119,7 @@ def report(preds, labels):
     logging.info(f"recall: {recall:.3f}")
 
 
-# =========================================================
 # 8. Load data
-# =========================================================
 def load_raw_data(fname):
     inst, lab = [], []
     with open(fname, "r") as f:
@@ -154,9 +139,7 @@ def load_raw_data(fname):
     return inst, lab
 
 
-# =========================================================
 # 9. Run
-# =========================================================
 def run(train_file, test_file):
     train_x, train_y = load_raw_data(train_file)
     params = training(train_x, train_y)
@@ -175,9 +158,7 @@ def run(train_file, test_file):
     report(preds, test_y)
 
 
-# =========================================================
 # 10. CLI
-# =========================================================
 def command_line_args():
     p = argparse.ArgumentParser()
     p.add_argument("-t", "--training", required=True)
