@@ -3,135 +3,128 @@ import sys
 import argparse
 import logging
 import math
-import matplotlib.pyplot as plt
-
-# ---------------------------
-# 1. 자동 Feature Selection
-# ---------------------------
-
-def automatic_feature_selection(instances, threshold=5.0):
-    """
-    Variance threshold 기반 자동 feature selection
-    date column 제외, feature 1~7 사용
-    """
-    features = [x[1:] for x in instances]  # remove date
-    features_t = list(zip(*features))
-
-    selected_idx = []
-    for i, col in enumerate(features_t):
-        mean = sum(col) / len(col)
-        var = sum((v - mean)**2 for v in col) / len(col)
-
-        # Variance threshold 자동 적용
-        if var >= threshold:
-            selected_idx.append(i)
-
-    logging.info(f"[Auto-Feature-Selection] selected features idx: {selected_idx}")
-    return selected_idx
 
 
-# ---------------------------
-# 2. Gaussian Naive Bayes Training
-# ---------------------------
-
-def training(instances, labels, feature_idx, smoothing):
-    parameters = {
-        "priors": {},
-        "mean": {},
-        "var": {},
-        "features": feature_idx,
-        "smoothing": smoothing
-    }
-
-    class_data = {0: [], 1: []}
-
-    for x, y in zip(instances, labels):
-        class_data[y].append([x[i+1] for i in feature_idx])  # +1 to skip date
-
-    total = len(labels)
-    parameters["priors"][0] = len(class_data[0]) / total
-    parameters["priors"][1] = len(class_data[1]) / total
-
-    for c in [0,1]:
-        features = list(zip(*class_data[c]))
-        means = []
-        variances = []
-
-        for fvals in features:
-            mean = sum(fvals) / len(fvals)
-            var = sum((v - mean) ** 2 for v in fvals) / len(fvals)
-            if var == 0:
-                var = smoothing   # smoothing 적용
-
-            means.append(mean)
-            variances.append(var)
-
-        parameters["mean"][c] = means
-        parameters["var"][c] = variances
-
-    return parameters
-
-
-# ---------------------------
-# 3. Gaussian PDF
-# ---------------------------
-
-def gaussian_prob(x, mean, var):
+# =========================================================
+# 1. Gaussian PDF
+# =========================================================
+def gaussian_pdf(x, mean, var):
+    if var == 0:
+        var = 1e-6  # smoothing
     coeff = 1.0 / math.sqrt(2 * math.pi * var)
     exponent = math.exp(-((x - mean) ** 2) / (2 * var))
     return coeff * exponent
 
 
-# ---------------------------
-# 4. Prediction
-# ---------------------------
+# =========================================================
+# 2. Training: Learn NORMAL distribution only
+# =========================================================
+def training(instances, labels):
+    """
+    Outlier Detection Naïve Bayes
+    - 정상(0) 데이터만 사용하여 feature 분포(mean, var) 학습
+    - label=1 (outlier)은 학습에 사용하지 않음
+    """
+    normal_data = [inst for inst, y in zip(instances, labels) if y == 0]
 
+    if len(normal_data) == 0:
+        logging.error("No normal data (label 0) found. Cannot train outlier detector.")
+        sys.exit(1)
+
+    # feature-wise mean & variance
+    features_t = list(zip(*[x[1:] for x in normal_data]))  # remove date
+
+    means = []
+    variances = []
+
+    for col in features_t:
+        mean = sum(col) / len(col)
+        var = sum((v - mean)**2 for v in col) / len(col)
+        if var == 0:
+            var = 1e-6
+        means.append(mean)
+        variances.append(var)
+
+    logging.info("Training completed using NORMAL-class data only.")
+    logging.info("Learned means: {}".format(means))
+    logging.info("Learned variances: {}".format(variances))
+
+    return {
+        "means": means,
+        "variances": variances,
+    }
+
+
+# =========================================================
+# 3. Prediction: compute log-likelihood → threshold
+# =========================================================
 def predict(instance, parameters):
-    feature_idx = parameters["features"]
-    smoothing = parameters["smoothing"]
+    """
+    Computes log-likelihood of NORMAL distribution.
+    If log-likelihood < threshold → OUTLIER(1)
+    """
+    x = instance[1:]  # remove date column
+    means = parameters["means"]
+    variances = parameters["variances"]
 
-    x = [instance[i+1] for i in feature_idx]
+    # calculate log-likelihood
+    log_likelihood = 0.0
+    for v, mean, var in zip(x, means, variances):
+        p = gaussian_pdf(v, mean, var)
+        log_likelihood += math.log(p + 1e-12)
 
-    priors = parameters["priors"]
-    means = parameters["mean"]
-    vars_ = parameters["var"]
+    # threshold = mean(logL) - 2*std(logL)  (robust heuristic)
+    threshold = parameters["threshold"]
 
-    posteriors = {}
-
-    for c in [0,1]:
-        log_prob = math.log(priors[c] + 1e-9)
-
-        for i in range(len(x)):
-            p = gaussian_prob(x[i], means[c][i], vars_[c][i])
-            log_prob += math.log(p + 1e-9)
-
-        posteriors[c] = log_prob
-
-    return 0 if posteriors[0] > posteriors[1] else 1
+    return 0 if log_likelihood >= threshold else 1
 
 
-# ---------------------------
-# 5. Metrics
-# ---------------------------
+# =========================================================
+# 4. Report metrics
+# =========================================================
+def report(predictions, answers):
+    if len(predictions) != len(answers):
+        logging.error("The lengths of two arguments should be same")
+        sys.exit(1)
 
-def compute_metrics(predictions, answers):
-    correct = sum(p==a for p,a in zip(predictions, answers))
-    accuracy = correct / len(answers)
+    # accuracy
+    correct = 0
+    for idx in range(len(predictions)):
+        if predictions[idx] == answers[idx]:
+            correct += 1
+    accuracy = round(correct / len(answers), 2) * 100
 
-    tp = sum(p==1 and a==1 for p,a in zip(predictions, answers))
-    fp = sum(p==1 and a==0 for p,a in zip(predictions, answers))
-    fn = sum(p==0 and a==1 for p,a in zip(predictions, answers))
+    # precision
+    tp = 0
+    fp = 0
+    for idx in range(len(predictions)):
+        if predictions[idx] == 1:
+            if answers[idx] == 1:
+                tp += 1
+            else:
+                fp += 1
+    precision = round(tp / (tp + fp + 1e-9), 2) * 100
 
-    precision = tp / (tp + fp + 1e-9)
-    recall = tp / (tp + fn + 1e-9)
+    # recall
+    tp = 0
+    fn = 0
+    for idx in range(len(answers)):
+        if answers[idx] == 1:
+            if predictions[idx] == 1:
+                tp += 1
+            else:
+                fn += 1
+    recall = round(tp / (tp + fn + 1e-9), 2) * 100
 
-    return accuracy, precision, recall
+    logging.info("===== PERFORMANCE REPORT =====")
+    logging.info("accuracy: {}%".format(accuracy))
+    logging.info("precision: {}%".format(precision))
+    logging.info("recall: {}%".format(recall))
 
 
-# ---------------------------
-# 6. Data Loading
-# ---------------------------
-
+# =========================================================
+# 5. Load Data
+# =========================================================
 def load_raw_data(fname):
     instances = []
     labels = []
@@ -147,65 +140,51 @@ def load_raw_data(fname):
             tmp[6] = int(tmp[6])
             tmp[7] = float(tmp[7])
             tmp[8] = int(tmp[8])
-
             instances.append(tmp[:-1])
             labels.append(tmp[-1])
-
     return instances, labels
 
 
-# ---------------------------
-# 7. Hyperparameter Tuning + Training + Report
-# ---------------------------
-
+# =========================================================
+# 6. FULL RUN
+# =========================================================
 def run(train_file, test_file):
+    # training phase
     train_instances, train_labels = load_raw_data(train_file)
+    parameters = training(train_instances, train_labels)
+
+    # compute training log-likelihood for threshold setting
+    log_ls = []
+    for inst, y in zip(train_instances, train_labels):
+        if y == 0:
+            x = inst[1:]
+            ll = 0
+            for v, mean, var in zip(x, parameters["means"], parameters["variances"]):
+                ll += math.log(gaussian_pdf(v, mean, var) + 1e-12)
+            log_ls.append(ll)
+
+    # automatic threshold selection (mean − 2 * std)
+    mu = sum(log_ls) / len(log_ls)
+    sigma = (sum((l - mu)**2 for l in log_ls) / len(log_ls))**0.5
+    threshold = mu - 2 * sigma
+
+    parameters["threshold"] = threshold
+    logging.info(f"Threshold (auto): {threshold:.4f}")
+
+    # testing phase
     test_instances, test_labels = load_raw_data(test_file)
+    predictions = []
+    for instance in test_instances:
+        result = predict(instance, parameters)
+        predictions.append(result)
 
-    # -------------------------------
-    # Automatic Feature Selection
-    # -------------------------------
-    selected_features = automatic_feature_selection(train_instances, threshold=5.0)
-
-    # -------------------------------
-    # Hyperparameter tuning: smoothing
-    # -------------------------------
-    smoothing_values = [1e-9, 1e-6, 1e-3]
-    acc_list, prec_list, rec_list = [], [], []
-
-    for sm in smoothing_values:
-        params = training(train_instances, train_labels, selected_features, sm)
-
-        predictions = [predict(inst, params) for inst in test_instances]
-
-        acc, prec, rec = compute_metrics(predictions, test_labels)
-        acc_list.append(acc)
-        prec_list.append(prec)
-        rec_list.append(rec)
-
-        logging.info(f"[Smoothing={sm}] Accuracy={acc:.3f}, Precision={prec:.3f}, Recall={rec:.3f}")
-
-    # -------------------------------
-    # Save tuning graph
-    # -------------------------------
-    plt.figure(figsize=(8,5))
-    plt.plot(smoothing_values, acc_list, marker='o', label='Accuracy')
-    plt.plot(smoothing_values, prec_list, marker='o', label='Precision')
-    plt.plot(smoothing_values, rec_list, marker='o', label='Recall')
-    plt.xscale('log')
-    plt.xlabel("Variance Smoothing")
-    plt.ylabel("Score")
-    plt.title("Hyperparameter Tuning Results")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig("tuning_results.png")
-    logging.info("Saved tuning graph: tuning_results.png")
+    # report
+    report(predictions, test_labels)
 
 
-# ---------------------------
-# 8. Main CLI
-# ---------------------------
-
+# =========================================================
+# 7. Argument parser
+# =========================================================
 def command_line_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("-t", "--training", required=True)
