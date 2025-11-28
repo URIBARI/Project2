@@ -3,127 +3,55 @@ import sys
 import argparse
 import logging
 import math
+import numpy as np
+import scipy.stats as st
 
 
 # =========================================================
-# 1. Gaussian PDF
+# 0. Candidate Distributions
 # =========================================================
-def gaussian_pdf(x, mean, var):
-    if var == 0:
-        var = 1e-6  # smoothing
-    coeff = 1.0 / math.sqrt(2 * math.pi * var)
-    exponent = math.exp(-((x - mean) ** 2) / (2 * var))
-    return coeff * exponent
-
-
-# =========================================================
-# 2. Training: Learn NORMAL distribution only
-# =========================================================
-def training(instances, labels):
-    """
-    Outlier Detection Naïve Bayes
-    - 정상(0) 데이터만 사용하여 feature 분포(mean, var) 학습
-    - label=1 (outlier)은 학습에 사용하지 않음
-    """
-    normal_data = [inst for inst, y in zip(instances, labels) if y == 0]
-
-    if len(normal_data) == 0:
-        logging.error("No normal data (label 0) found. Cannot train outlier detector.")
-        sys.exit(1)
-
-    # feature-wise mean & variance
-    features_t = list(zip(*[x[1:] for x in normal_data]))  # remove date
-
-    means = []
-    variances = []
-
-    for col in features_t:
-        mean = sum(col) / len(col)
-        var = sum((v - mean)**2 for v in col) / len(col)
-        if var == 0:
-            var = 1e-6
-        means.append(mean)
-        variances.append(var)
-
-    logging.info("Training completed using NORMAL-class data only.")
-    logging.info("Learned means: {}".format(means))
-    logging.info("Learned variances: {}".format(variances))
-
-    return {
-        "means": means,
-        "variances": variances,
-    }
+DISTRIBUTIONS = {
+    "gaussian": st.norm,
+    "gamma": st.gamma,
+    "lognorm": st.lognorm,
+    "weibull": st.weibull_min,
+}
 
 
 # =========================================================
-# 3. Prediction: compute log-likelihood → threshold
+# 1. Fit distribution and choose best one (AIC)
 # =========================================================
-def predict(instance, parameters):
-    """
-    Computes log-likelihood of NORMAL distribution.
-    If log-likelihood < threshold → OUTLIER(1)
-    """
-    x = instance[1:]  # remove date column
-    means = parameters["means"]
-    variances = parameters["variances"]
+def fit_distribution(data):
+    best_aic = float("inf")
+    best_name = None
+    best_params = None
 
-    # calculate log-likelihood
-    log_likelihood = 0.0
-    for v, mean, var in zip(x, means, variances):
-        p = gaussian_pdf(v, mean, var)
-        log_likelihood += math.log(p + 1e-12)
+    for name, dist in DISTRIBUTIONS.items():
+        try:
+            params = dist.fit(data)
+            loglik = np.sum(dist.logpdf(data, *params))
+            k = len(params)
+            aic = 2 * k - 2 * loglik
+            if aic < best_aic:
+                best_aic = aic
+                best_name = name
+                best_params = params
+        except Exception:
+            continue
 
-    # threshold = mean(logL) - 2*std(logL)  (robust heuristic)
-    threshold = parameters["threshold"]
-
-    return 0 if log_likelihood >= threshold else 1
-
-
-# =========================================================
-# 4. Report metrics
-# =========================================================
-def report(predictions, answers):
-    if len(predictions) != len(answers):
-        logging.error("The lengths of two arguments should be same")
-        sys.exit(1)
-
-    # accuracy
-    correct = 0
-    for idx in range(len(predictions)):
-        if predictions[idx] == answers[idx]:
-            correct += 1
-    accuracy = round(correct / len(answers), 2) * 100
-
-    # precision
-    tp = 0
-    fp = 0
-    for idx in range(len(predictions)):
-        if predictions[idx] == 1:
-            if answers[idx] == 1:
-                tp += 1
-            else:
-                fp += 1
-    precision = round(tp / (tp + fp + 1e-9), 2) * 100
-
-    # recall
-    tp = 0
-    fn = 0
-    for idx in range(len(answers)):
-        if answers[idx] == 1:
-            if predictions[idx] == 1:
-                tp += 1
-            else:
-                fn += 1
-    recall = round(tp / (tp + fn + 1e-9), 2) * 100
-
-    logging.info("===== PERFORMANCE REPORT =====")
-    logging.info("accuracy: {}%".format(accuracy))
-    logging.info("precision: {}%".format(precision))
-    logging.info("recall: {}%".format(recall))
+    return best_name, best_params
 
 
 # =========================================================
-# 5. Load Data
+# 2. PDF evaluation
+# =========================================================
+def pdf_value(dist_name, params, x):
+    dist = DISTRIBUTIONS[dist_name]
+    return dist.pdf(x, *params)
+
+
+# =========================================================
+# 3. Load data
 # =========================================================
 def load_raw_data(fname):
     instances = []
@@ -146,44 +74,108 @@ def load_raw_data(fname):
 
 
 # =========================================================
-# 6. FULL RUN
+# 4. Training
+# =========================================================
+def training(instances, labels):
+    normal_data = [inst for inst, y in zip(instances, labels) if y == 0]
+
+    if len(normal_data) == 0:
+        logging.error("No normal (label=0) data in training set.")
+        sys.exit(1)
+
+    X = np.array([x[1:] for x in normal_data], dtype=float)
+
+    # 1) Z-score scaling
+    means = X.mean(axis=0)
+    stds = X.std(axis=0)
+    stds[stds == 0] = 1e-6
+    X_scaled = (X - means) / stds
+
+    # 2) Automatic distribution selection for each feature
+    dist_info = []
+    for i in range(X_scaled.shape[1]):
+        name, params = fit_distribution(X_scaled[:, i])
+        dist_info.append((name, params))
+        logging.info(f"Feature {i}: best distribution = {name}")
+
+    logging.info("Training completed (auto distribution selection + scaling).")
+
+    return {"scaler": (means, stds), "dists": dist_info}
+
+
+# =========================================================
+# 5. Predict (return log-likelihood)
+# =========================================================
+def predict(instance, parameters):
+    means, stds = parameters["scaler"]
+    x = np.array(instance[1:], dtype=float)
+
+    x_scaled = (x - means) / stds
+
+    log_likelihood = 0.0
+    for val, (dist_name, params) in zip(x_scaled, parameters["dists"]):
+        p = pdf_value(dist_name, params, val)
+        log_likelihood += math.log(p + 1e-12)
+
+    return log_likelihood
+
+
+# =========================================================
+# 6. Report
+# =========================================================
+def report(predictions, answers):
+    correct = sum(p == a for p, a in zip(predictions, answers))
+    accuracy = round(correct / len(answers), 2) * 100
+
+    tp = sum(p == 1 and a == 1 for p, a in zip(predictions, answers))
+    fp = sum(p == 1 and a == 0 for p, a in zip(predictions, answers))
+    fn = sum(p == 0 and a == 1 for p, a in zip(predictions, answers))
+
+    precision = round(tp / (tp + fp + 1e-9), 2) * 100
+    recall = round(tp / (tp + fn + 1e-9), 2) * 100
+
+    logging.info("===== PERFORMANCE REPORT =====")
+    logging.info(f"accuracy: {accuracy}%")
+    logging.info(f"precision: {precision}%")
+    logging.info(f"recall: {recall}%")
+
+
+# =========================================================
+# 7. Run
 # =========================================================
 def run(train_file, test_file):
-    # training phase
-    train_instances, train_labels = load_raw_data(train_file)
-    parameters = training(train_instances, train_labels)
+    inst_train, lab_train = load_raw_data(train_file)
+    params = training(inst_train, lab_train)
 
-    # compute training log-likelihood for threshold setting
-    log_ls = []
-    for inst, y in zip(train_instances, train_labels):
+    # ----------------------------------------------
+    # Compute threshold using percentile (5%)
+    # ----------------------------------------------
+    logLs = []
+    for inst, y in zip(inst_train, lab_train):
         if y == 0:
-            x = inst[1:]
-            ll = 0
-            for v, mean, var in zip(x, parameters["means"], parameters["variances"]):
-                ll += math.log(gaussian_pdf(v, mean, var) + 1e-12)
-            log_ls.append(ll)
+            ll = predict(inst, params)
+            logLs.append(ll)
 
-    # automatic threshold selection (mean − 2 * std)
-    mu = sum(log_ls) / len(log_ls)
-    sigma = (sum((l - mu)**2 for l in log_ls) / len(log_ls))**0.5
-    threshold = mu - 2 * sigma
+    threshold = np.percentile(logLs, 5)   # Outlier threshold (recommended)
+    params["threshold"] = threshold
 
-    parameters["threshold"] = threshold
-    logging.info(f"Threshold (auto): {threshold:.4f}")
+    logging.info(f"Auto threshold set to 5th percentile: {threshold}")
 
-    # testing phase
-    test_instances, test_labels = load_raw_data(test_file)
-    predictions = []
-    for instance in test_instances:
-        result = predict(instance, parameters)
-        predictions.append(result)
+    # ----------------------------------------------
+    # Testing
+    # ----------------------------------------------
+    inst_test, lab_test = load_raw_data(test_file)
+    preds = []
 
-    # report
-    report(predictions, test_labels)
+    for inst in inst_test:
+        ll = predict(inst, params)
+        preds.append(0 if ll >= threshold else 1)
+
+    report(preds, lab_test)
 
 
 # =========================================================
-# 7. Argument parser
+# 8. Argparse
 # =========================================================
 def command_line_args():
     parser = argparse.ArgumentParser()
@@ -198,11 +190,11 @@ def main():
     logging.basicConfig(level=args.log)
 
     if not os.path.exists(args.training):
-        logging.error("Training dataset not found")
+        logging.error("Training file not found")
         sys.exit(1)
 
     if not os.path.exists(args.testing):
-        logging.error("Testing dataset not found")
+        logging.error("Testing file not found")
         sys.exit(1)
 
     run(args.training, args.testing)
