@@ -73,6 +73,17 @@ def load_raw_data(fname):
     return instances, labels
 
 
+# Helper: apply feature subset
+def apply_feature_subset(instances, selected):
+    new_data = []
+    for inst in instances:
+        row = [inst[0]]  # keep date
+        for idx in selected:
+            row.append(inst[idx + 1])  # +1 offset
+        new_data.append(row)
+    return new_data
+
+
 # =========================================================
 # 4. Training
 # =========================================================
@@ -85,20 +96,18 @@ def training(instances, labels):
 
     X = np.array([x[1:] for x in normal_data], dtype=float)
 
-    # 1) Z-score scaling
+    # Z-score scaling
     means = X.mean(axis=0)
     stds = X.std(axis=0)
     stds[stds == 0] = 1e-6
     X_scaled = (X - means) / stds
 
-    # 2) Automatic distribution selection for each feature
+    # Automatic distribution selection
     dist_info = []
     for i in range(X_scaled.shape[1]):
         name, params = fit_distribution(X_scaled[:, i])
         dist_info.append((name, params))
         logging.info(f"Feature {i}: best distribution = {name}")
-
-    logging.info("Training completed (auto distribution selection + scaling).")
 
     return {"scaler": (means, stds), "dists": dist_info}
 
@@ -109,7 +118,6 @@ def training(instances, labels):
 def predict(instance, parameters):
     means, stds = parameters["scaler"]
     x = np.array(instance[1:], dtype=float)
-
     x_scaled = (x - means) / stds
 
     log_likelihood = 0.0
@@ -125,62 +133,102 @@ def predict(instance, parameters):
 # =========================================================
 def report(predictions, answers):
     correct = sum(p == a for p, a in zip(predictions, answers))
-    accuracy = round(correct / len(answers), 2) * 100
+    accuracy = round(correct / len(answers), 3)
 
     tp = sum(p == 1 and a == 1 for p, a in zip(predictions, answers))
     fp = sum(p == 1 and a == 0 for p, a in zip(predictions, answers))
     fn = sum(p == 0 and a == 1 for p, a in zip(predictions, answers))
 
-    precision = round(tp / (tp + fp + 1e-9), 2) * 100
-    recall = round(tp / (tp + fn + 1e-9), 2) * 100
+    precision = round(tp / (tp + fp + 1e-9), 3)
+    recall = round(tp / (tp + fn + 1e-9), 3)
 
     logging.info("===== PERFORMANCE REPORT =====")
-    logging.info(f"accuracy: {accuracy}%")
-    logging.info(f"precision: {precision}%")
-    logging.info(f"recall: {recall}%")
+    logging.info(f"accuracy: {accuracy}")
+    logging.info(f"precision: {precision}")
+    logging.info(f"recall: {recall}")
+
+    return accuracy, precision, recall
 
 
 # =========================================================
-# 7. Run
+# 7. Full run on selected feature set
 # =========================================================
-def run(train_file, test_file):
-    inst_train, lab_train = load_raw_data(train_file)
-    params = training(inst_train, lab_train)
+def run_with_features(train_file, test_file, selected_features):
+    train_instances, train_labels = load_raw_data(train_file)
+    test_instances, test_labels = load_raw_data(test_file)
 
-    # ----------------------------------------------
-    # Compute threshold using percentile (5%)
-    # ----------------------------------------------
-    logLs = []
-    for inst, y in zip(inst_train, lab_train):
-        if y == 0:
-            ll = predict(inst, params)
-            logLs.append(ll)
+    train_mod = apply_feature_subset(train_instances, selected_features)
+    test_mod = apply_feature_subset(test_instances, selected_features)
 
-    threshold = np.percentile(logLs, 5)   # Outlier threshold (recommended)
+    params = training(train_mod, train_labels)
+
+    # threshold using percentile (5%)
+    logLs = [predict(inst, params) for inst, y in zip(train_mod, train_labels) if y == 0]
+    threshold = np.percentile(logLs, 5)
     params["threshold"] = threshold
+    logging.info(f"Threshold = {threshold}")
 
-    logging.info(f"Auto threshold set to 5th percentile: {threshold}")
-
-    # ----------------------------------------------
-    # Testing
-    # ----------------------------------------------
-    inst_test, lab_test = load_raw_data(test_file)
     preds = []
-
-    for inst in inst_test:
+    for inst in test_mod:
         ll = predict(inst, params)
         preds.append(0 if ll >= threshold else 1)
 
-    report(preds, lab_test)
+    return report(preds, test_labels)
 
 
 # =========================================================
-# 8. Argparse
+# 8. FEATURE IMPORTANCE ANALYSIS
+# =========================================================
+def evaluate_feature_importance(train_file, test_file):
+    logging.info("===== FEATURE IMPORTANCE EVALUATION =====")
+
+    base_acc, base_prec, base_rec = run_with_features(
+        train_file, test_file, list(range(7))
+    )
+
+    results = []
+
+    for remove_idx in range(7):
+        remaining = [i for i in range(7) if i != remove_idx]
+        logging.info(f"\n--- Testing WITHOUT feature {remove_idx} ---")
+        acc, prec, rec = run_with_features(train_file, test_file, remaining)
+        results.append((remove_idx, acc, prec, rec, remaining))
+
+    return base_prec, base_rec, results
+
+
+# =========================================================
+# 9. AUTO FEATURE SELECTION
+# =========================================================
+def auto_select_features(train_file, test_file):
+    base_prec, base_rec, results = evaluate_feature_importance(train_file, test_file)
+
+    selected = []
+    removed = []
+
+    for idx, acc, prec, rec, remaining in results:
+        # 제거했을 때 성능이 좋아지면 noise
+        if prec > base_prec or rec > base_rec:
+            removed.append(idx)
+        else:
+            selected.append(idx)
+
+    logging.info("===== AUTO FEATURE SELECTION RESULT =====")
+    logging.info(f"Selected Features: {selected}")
+    logging.info(f"Removed Noise Features: {removed}")
+
+    return selected
+
+
+# =========================================================
+# 10. MAIN
 # =========================================================
 def command_line_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("-t", "--training", required=True)
     parser.add_argument("-u", "--testing", required=True)
+    parser.add_argument("--auto", action="store_true",
+                        help="Run fully automated feature selection + training")
     parser.add_argument("-l", "--log", default="INFO")
     return parser.parse_args()
 
@@ -189,15 +237,16 @@ def main():
     args = command_line_args()
     logging.basicConfig(level=args.log)
 
-    if not os.path.exists(args.training):
-        logging.error("Training file not found")
-        sys.exit(1)
+    train_file = args.training
+    test_file = args.testing
 
-    if not os.path.exists(args.testing):
-        logging.error("Testing file not found")
-        sys.exit(1)
-
-    run(args.training, args.testing)
+    if args.auto:
+        selected = auto_select_features(train_file, test_file)
+        logging.info("===== FINAL TRAINING WITH SELECTED FEATURES =====")
+        run_with_features(train_file, test_file, selected)
+    else:
+        logging.info("===== RUNNING WITH ALL FEATURES =====")
+        run_with_features(train_file, test_file, list(range(7)))
 
 
 if __name__ == "__main__":
