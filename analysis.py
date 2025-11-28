@@ -7,9 +7,6 @@ import warnings
 warnings.filterwarnings("ignore")
 
 
-# =============================================
-# 1. Load and preprocess data
-# =============================================
 def load_dataset():
     df = pd.read_csv("training.csv")
     df["date"] = pd.to_datetime(df["date"])
@@ -17,9 +14,6 @@ def load_dataset():
     return df
 
 
-# =============================================
-# 2. Distributions to test
-# =============================================
 DISTRIBUTIONS = {
     "gaussian": st.norm,
     "gamma": st.gamma,
@@ -28,23 +22,17 @@ DISTRIBUTIONS = {
 }
 
 
-# =============================================
-# 3. Fit distribution + compute AIC
-# =============================================
 def fit_and_compute_aic(data, dist):
     """
     Fits a distribution and computes AIC.
     """
     params = dist.fit(data)
     loglik = np.sum(dist.logpdf(data, *params))
-    k = len(params)  # number of parameters
+    k = len(params)
     aic = 2 * k - 2 * loglik
     return aic, params
 
 
-# =============================================
-# 4. Analyze one feature fully
-# =============================================
 def analyze_feature(name, data):
     print(f"\n======= FEATURE: {name} =======")
 
@@ -57,12 +45,10 @@ def analyze_feature(name, data):
         except:
             results[dist_name] = (np.inf, None)
 
-    # Best distribution
     best_dist = min(results, key=lambda k: results[k][0])
     print(f"Best distribution for {name}: {best_dist}")
     print("AIC values:", {k: round(v[0], 2) for k, v in results.items()})
 
-    # Draw histogram + best-fit curve
     plt.figure(figsize=(7, 5))
     plt.hist(data, bins=30, density=True, alpha=0.6, color='gray')
 
@@ -82,13 +68,9 @@ def analyze_feature(name, data):
     return best_dist, results
 
 
-# =============================================
-# 5. Main
-# =============================================
 def main():
     df = load_dataset()
 
-    # Normalize column names: strip whitespace + lower-case
     df.columns = df.columns.str.strip().str.lower()
 
     print("Normalized columns:", df.columns)
@@ -107,7 +89,7 @@ def main():
 
     for col in feature_cols:
         if col not in df.columns:
-            print(f"❌ Column not found after normalization: {col}")
+            print(f"Column not found after normalization: {col}")
             continue
 
         data = df[col].values

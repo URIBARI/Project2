@@ -7,9 +7,7 @@ import numpy as np
 import scipy.stats as st
 
 
-# =========================================================
 # 0. Candidate Distributions
-# =========================================================
 DISTRIBUTIONS = {
     "gaussian": st.norm,
     "gamma": st.gamma,
@@ -18,9 +16,7 @@ DISTRIBUTIONS = {
 }
 
 
-# =========================================================
 # 1. Fit distribution and choose best one (AIC)
-# =========================================================
 def fit_distribution(data):
     best_aic = float("inf")
     best_name = None
@@ -42,17 +38,13 @@ def fit_distribution(data):
     return best_name, best_params
 
 
-# =========================================================
 # 2. PDF evaluation
-# =========================================================
 def pdf_value(dist_name, params, x):
     dist = DISTRIBUTIONS[dist_name]
     return dist.pdf(x, *params)
 
 
-# =========================================================
 # 3. Load data
-# =========================================================
 def load_raw_data(fname):
     instances = []
     labels = []
@@ -84,9 +76,7 @@ def apply_feature_subset(instances, selected):
     return new_data
 
 
-# =========================================================
 # 4. Training
-# =========================================================
 def training(instances, labels):
     normal_data = [inst for inst, y in zip(instances, labels) if y == 0]
 
@@ -112,9 +102,7 @@ def training(instances, labels):
     return {"scaler": (means, stds), "dists": dist_info}
 
 
-# =========================================================
 # 5. Predict (return log-likelihood)
-# =========================================================
 def predict(instance, parameters):
     means, stds = parameters["scaler"]
     x = np.array(instance[1:], dtype=float)
@@ -128,9 +116,7 @@ def predict(instance, parameters):
     return log_likelihood
 
 
-# =========================================================
 # 6. Report
-# =========================================================
 def report(predictions, answers):
     correct = sum(p == a for p, a in zip(predictions, answers))
     accuracy = round(correct / len(answers), 3)
@@ -150,9 +136,7 @@ def report(predictions, answers):
     return accuracy, precision, recall
 
 
-# =========================================================
 # 7. Full run on selected feature set
-# =========================================================
 def run_with_features(train_file, test_file, selected_features):
     train_instances, train_labels = load_raw_data(train_file)
     test_instances, test_labels = load_raw_data(test_file)
@@ -176,9 +160,7 @@ def run_with_features(train_file, test_file, selected_features):
     return report(preds, test_labels)
 
 
-# =========================================================
 # 8. FEATURE IMPORTANCE ANALYSIS
-# =========================================================
 def evaluate_feature_importance(train_file, test_file):
     logging.info("===== FEATURE IMPORTANCE EVALUATION =====")
 
@@ -197,9 +179,7 @@ def evaluate_feature_importance(train_file, test_file):
     return base_prec, base_rec, results
 
 
-# =========================================================
 # 9. AUTO FEATURE SELECTION
-# =========================================================
 def auto_select_features(train_file, test_file):
     base_prec, base_rec, results = evaluate_feature_importance(train_file, test_file)
 
@@ -207,7 +187,6 @@ def auto_select_features(train_file, test_file):
     removed = []
 
     for idx, acc, prec, rec, remaining in results:
-        # 제거했을 때 성능이 좋아지면 noise
         if prec > base_prec or rec > base_rec:
             removed.append(idx)
         else:
@@ -220,9 +199,7 @@ def auto_select_features(train_file, test_file):
     return selected
 
 
-# =========================================================
 # 10. MAIN
-# =========================================================
 def command_line_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("-t", "--training", required=True)
